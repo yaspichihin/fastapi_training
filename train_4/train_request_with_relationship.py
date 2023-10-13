@@ -61,9 +61,10 @@ async def create_posts(
 
 async def get_users_with_posts(session: AsyncSession,):
     # Подгрузка через join, 1 запрос, но дублирование информации и не забывать про .unique()
+    # joinedload часто используют для связи 1к1
     stmt = select(mdl.User).options(joinedload(mdl.User.posts)).order_by(mdl.User.id)
 
-    # Подгрузка через доп запрос, позволяет уйти от .unique()
+    # Подгрузка через доп запрос, позволяет уйти от .unique() часто используют для связи ко многим
     # stmt = select(mdl.User).options(selectinload(mdl.User.posts)).order_by(mdl.User.id)
 
     users = await session.scalars(stmt)
