@@ -178,13 +178,149 @@ async def main_relations(session: AsyncSession):
     await get_profiles_with_users_and_users_with_posts(session)
 
 
+async def create_order(
+    session: AsyncSession,
+    promocode: str | None = None,
+) -> mdl.Order:
+    order = mdl.Order(promocode=promocode)
+    session.add(order)
+    await session.commit()
+    return order
+
+
+async def create_product(
+    session: AsyncSession,
+    name: str,
+    description: str, 
+    price: int,
+) -> mdl.Product:
+    product = mdl.Product(name=name, description=description, price=price)
+    session.add(product)
+    await session.commit()
+    return product
+    
+
 async def demo_m2m(session: AsyncSession):
-    pass
+    # Создадим пару заказов
+    order_1 = await create_order(session)
+    order_2 = await create_order(session, promocode="promo")
+    
+    # Создадим пару продуктов
+    product_1 = await create_product(session, "product_1", "product_1_dsc", 1)
+    product_2 = await create_product(session, "product_2", "product_2_dsc", 2)
+    product_3 = await create_product(session, "product_3", "product_3_dsc", 3)
+
+    # Объединим продукты и товары
+
+    # Для подгрузки Order.products для работы связка m2m, по умолчанию получает данные из кэша
+    # Когда данные требуются именно из таблицы лучше использовать scalars
+    # order_1 = await session.get(mdl.Order, order_1.id, options=(selectinload(mdl.Order.products)))
+    # order_2 = await session.get(mdl.Order, order_2.id, options=(selectinload(mdl.Order.products)))
+    order_1 = await session.scalar(
+        select(mdl.Order)
+        .where(mdl.Order.id == order_1.id)
+        .options(selectinload(mdl.Order.products))
+    )
+    order_2 = await session.scalar(
+        select(mdl.Order)
+        .where(mdl.Order.id == order_2.id)
+        .options(selectinload(mdl.Order.products))
+    )
+
+    # Добавление продуктов в звказы
+    order_1.products.append(product_1)
+    order_2.products.append(product_1)
+    order_2.products.append(product_2)
+    # Альтернатива через перепримваивание
+    # order_2.products = [product_1, product_2]
+
+    # Сохраним изменения
+    await session.commit()
+
+
+async def get_orders_with_products(session: AsyncSession) -> list[mdl.Order]:
+    query = select(mdl.Order).options(selectinload(mdl.Order.products)).order_by(mdl.Order.id)
+    orders: Result = await session.scalars(query)
+    return list(orders)
+
+
+async def get_orders_with_products_through_secondary(session: AsyncSession) -> None:
+    orders = await get_orders_with_products(session)
+    for order in orders:
+        print(f"{order.id=}")
+        for product in order.products:
+            print(f"--> {product.name=}")
+    # order.id=3
+    # --> product.name='product_1'
+    # order.id=4
+    # --> product.name='product_1'
+    # --> product.name='product_2'
+
+
+async def get_orders_with_products_with_association(session: AsyncSession) -> list[mdl.Order]:
+    stmt = (
+        select(mdl.Order)
+        .options(
+            selectinload(mdl.Order.products_details)
+            .joinedload(mdl.OrderProductAssociation.product)
+        )
+        .order_by(mdl.Order.id))
+    orders: Result = await session.scalars(stmt)
+    return list(orders)
+
+
+# Еще один print заказов и продуктов
+async def another_func(session: AsyncSession) -> None:
+    orders = await get_orders_with_products_with_association(session=session)
+    for order in orders:
+        print(order.id, order.promocode, order.created_at, "products:")
+        for order_product_details in order.products_details: # type: mdl.OrderProductAssociation
+            # Для order_product_details.product нужно специально еще указывать
+            # .joinedload(mdl.OrderProductAssociation.product) для подгрузки данных
+            print(
+                "-",
+                order_product_details.product.id,
+                order_product_details.product.name,
+                order_product_details.product.price,
+                "qty:", order_product_details.count,
+            )
+    # 3 None 2023-10-25 16:47:21.744829 products:
+    # - 4 product_1 1 qty: 1
+    # 4 promo 2023-10-25 16:47:21.751829 products:
+    # - 4 product_1 1 qty: 1
+    # - 5 product_2 2 qty: 1
+
+
+# Пример функции добавления 1 подарка ко всем заказам
+async def add_gift_to_all_orders(session: AsyncSession) -> None:
+    # Получим все заказы
+    orders = await get_orders_with_products_with_association(session)
+
+    # Создадим подарок
+    gift = await create_product(session, "gift", "gift_desc", 0)
+
+    # Добавим подарок
+    for order in orders:
+        order.products_details.append(
+            mdl.OrderProductAssociation(
+                count=1,
+                unit_price=0,
+                product=gift
+                # order прописывать не нужно т.к. добавляем
+                # уже через связь order (order.products_details)
+            )
+        )
+
+
 
 
 async def main():
     async with mdl.db_helper.session_factory() as session:
-        await demo_m2m(session)
+        # await add_gift_to_all_orders(session)
+        await another_func(session)
+
+
+
 
 
 if __name__ == "__main__":
